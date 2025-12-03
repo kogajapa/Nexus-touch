@@ -641,13 +641,15 @@ const Hero: React.FC = () => {
         </div>
       </div>
 
-      {/* Fade inferior (somente rodapé) para ocultar logo sem bloquear interações */}
-      <div className="pointer-events-none absolute inset-0 z-30">
-        <div
-          className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/100 to-transparent"
-          style={{ height: '20%' }}
-        ></div>
-      </div>
+      {/* Fade inferior (somente rodapé) para ocultar logo sem bloquear interações - Desativado em mobile */}
+      {!isMobile && (
+        <div className="pointer-events-none absolute inset-0 z-30">
+          <div
+            className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/100 to-transparent"
+            style={{ height: '20%' }}
+          ></div>
+        </div>
+      )}
     </section>
   );
 };
