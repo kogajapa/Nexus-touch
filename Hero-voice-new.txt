@@ -1,0 +1,144 @@
+// Salve este conteúdo temporário - vou reescrever a função connectToGemini
+
+const connectToGemini = async () => {
+  try {
+    setError(null);
+    setIsLive(true);
+
+    console.log('🚀 Iniciando Live Voice...');
+
+    const apiKey = import.meta.env.VITE_API_KEY;
+    if (!apiKey) throw new Error('API Key não configurada');
+
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Audio Context para reprodução
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    audioContextRef.current = audioCtx;
+
+    // Analyzer para visualização
+    const analyzer = audioCtx.createAnalyser();
+    analyzer.fftSize = 256;
+    analyzerRef.current = analyzer;
+
+    const gainNode = audioCtx.createGain();
+    gainNode.connect(analyzer);
+    analyzer.connect(audioCtx.destination);
+
+    // Loop de visualização
+    const updateAudioLevel = () => {
+      if (!sessionRef.current) return;
+      const dataArray = new Uint8Array(analyzer.frequencyBinCount);
+      analyzer.getByteFrequencyData(dataArray);
+      const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+      audioLevelRef.current = avg / 128.0;
+      requestAnimationFrame(updateAudioLevel);
+    };
+    updateAudioLevel();
+
+    // Capturar microfone
+    console.log('🎤 Capturando microfone...');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        sampleRate: 16000
+      }
+    });
+
+    // Conectar ao Gemini
+    console.log('🔗 Conectando ao Gemini...');
+    const session = await ai.live.connect({
+      model: 'gemini-2.0-flash-exp',
+      config: {
+        responseModalities: [Modality.AUDIO],
+      },
+    });
+
+    sessionRef.current = session;
+    console.log('✅ Conectado! FALE AGORA!');
+
+    // Enviar mensagem inicial
+    await session.send('Você é um assistente da Nexus Touch. Responda em português de forma breve e profissional.');
+
+    // Receber respostas em áudio
+    session.on('message', async (msg: any) => {
+      console.log('📨 Mensagem:', msg);
+
+      if (msg.serverContent?.modelTurn?.parts) {
+        for (const part of msg.serverContent.modelTurn.parts) {
+          if (part.inlineData?.data) {
+            console.log('🎵 Áudio recebido! Reproduzindo...');
+            const audioData = base64ToArrayBuffer(part.inlineData.data);
+            const audioBuffer = await audioCtx.decodeAudioData(audioData);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(gainNode);
+            source.start(0);
+          }
+        }
+      }
+    });
+
+    session.on('close', () => {
+      console.log('❌ Conexão fechada');
+      handleDisconnect();
+    });
+
+    session.on('error', (err: any) => {
+      console.error('🚨 Erro:', err);
+      handleDisconnect();
+    });
+
+    // Usar MediaRecorder para capturar áudio
+    const mediaRecorder = new MediaRecorder(stream);
+    let audioChunks: Blob[] = [];
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = async () => {
+      if (audioChunks.length === 0 || !sessionRef.current) return;
+
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      audioChunks = [];
+
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+
+      try {
+        await sessionRef.current.send({
+          realtimeInput: {
+            mediaChunks: [{
+              data: base64,
+              mimeType: 'audio/webm',
+            }],
+          },
+        });
+        console.log('📤 Áudio enviado!');
+      } catch (err) {
+        console.error('⚠️ Erro ao enviar:', err);
+      }
+
+      // Continuar gravando
+      if (sessionRef.current) {
+        mediaRecorder.start();
+        setTimeout(() => mediaRecorder.stop(), 1000);
+      }
+    };
+
+    // Gravar em chunks de 1 segundo
+    mediaRecorder.start();
+    setTimeout(() => mediaRecorder.stop(), 1000);
+
+  } catch (err: any) {
+    console.error("🚨 Erro:", err);
+    setError(err.message || "Erro ao conectar");
+    setIsLive(false);
+  }
+};
