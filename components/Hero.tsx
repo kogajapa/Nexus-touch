@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence, useScroll, useTransform } from 'framer-motion';
 import { ArrowRight, Fingerprint, Mic, StopCircle } from 'lucide-react';
 import { ActivityHandling, EndSensitivity, GoogleGenAI, Modality, StartSensitivity, TurnCoverage } from "@google/genai";
@@ -171,6 +171,9 @@ const Hero: React.FC = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isLive, setIsLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
   
   const containerRef = useRef(null);
   const audioLevelRef = useRef(0);
@@ -182,7 +185,24 @@ const Hero: React.FC = () => {
   const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
   const { scrollY } = useScroll();
-  const y1 = useTransform(scrollY, [0, 500], [0, 150]); 
+  const y1 = useTransform(scrollY, [0, 500], [0, 150]);
+
+  // Detecta viewport mobile para desativar Spline pesado e ajustar layout
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Função para navegar para seções do site
+  const navigateToSection = (sectionId: string) => {
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      console.log(`📍 Navegando para seção: ${sectionId}`);
+    }
+  };
 
   // Auto-slide logic (desativado ao remover fundo de imagens)
   // useEffect(() => {
@@ -261,10 +281,45 @@ const Hero: React.FC = () => {
                 'Pilares: hardware robusto (32"-55" 4K, PCAP, alumínio), rastreamento de mãos/gestos e presença, IA de voz/visão/texto, operação 24/7 com telemetria e atualizações OTA.',
                 'Portfólio: Nexus AI Avatar (avatar 3D responsivo para museus/educação), Nexus Memorial Interactive (linhas do tempo e acervos digitais), linha de totens indoor como Neo Slim V3 (22mm, 43" 4K), soluções saúde via Nexus Health (triagem, concierge, multiagentes).',
                 'Equipe: Taffarel (CEO, Nexus Health), Leandro (CTO, IA e totens).',
-                'Tom: brasileiro, conciso, natural, consultivo; não invente preços; sempre conduza para próximos passos (ver soluções, falar com time, agendar demo).'
+                'Tom: brasileiro, conciso, natural, consultivo; não invente preços; sempre conduza para próximos passos (ver soluções, falar com time, agendar demo).',
+                '',
+                'NAVEGAÇÃO DO SITE - Você pode navegar o usuário automaticamente pelas seções:',
+                '- "home": Página inicial',
+                '- "about": Sobre recursos e funcionalidades',
+                '- "about-us": Nossa história e equipe',
+                '- "catalog": Catálogo de produtos (totens, avatares, mesas)',
+                '- "hand-tracking": Demonstração de rastreamento de mãos',
+                '- "contact": Formulário de contato e agendamento',
+                '',
+                'IMPORTANTE: Quando o usuário mencionar interesse em:',
+                '- Ver produtos/soluções → navegue para "catalog"',
+                '- Conhecer a empresa/história → navegue para "about-us"',
+                '- Entender funcionalidades → navegue para "about"',
+                '- Agendar/solicitar orçamento/falar com time → navegue para "contact"',
+                '- Ver rastreamento de mãos → navegue para "hand-tracking"',
+                '- Voltar ao início → navegue para "home"',
+                '',
+                'Use a função navigate_to_section sempre que identificar intenção de navegação do usuário.'
               ].join(' ')
             }]
           },
+          tools: [{
+            functionDeclarations: [{
+              name: 'navigate_to_section',
+              description: 'Navega automaticamente para uma seção específica do site',
+              parameters: {
+                type: 'object',
+                properties: {
+                  section: {
+                    type: 'string',
+                    description: 'ID da seção para navegar',
+                    enum: ['home', 'about', 'about-us', 'catalog', 'hand-tracking', 'contact']
+                  }
+                },
+                required: ['section']
+              }
+            }]
+          }],
         },
         callbacks: {
           onopen: () => {
@@ -286,6 +341,33 @@ const Hero: React.FC = () => {
               });
               scheduledSourcesRef.current.clear();
               nextStartTimeRef.current = audioCtx.currentTime;
+            }
+
+            // Handle function calls (navigation)
+            if (msg.serverContent?.modelTurn?.parts) {
+              for (const part of msg.serverContent.modelTurn.parts) {
+                if (part.functionCall) {
+                  const { name, args } = part.functionCall;
+                  console.log(`🔧 Function call recebido: ${name}`, args);
+
+                  if (name === 'navigate_to_section' && args.section) {
+                    navigateToSection(args.section);
+
+                    // Enviar resposta da função para o Gemini
+                    try {
+                      sessionRef.current?.sendRealtimeInput({
+                        functionCallResponse: {
+                          id: part.functionCall.id,
+                          name: name,
+                          response: { success: true, section: args.section }
+                        }
+                      });
+                    } catch (err) {
+                      console.error('❌ Erro ao enviar function response:', err);
+                    }
+                  }
+                }
+              }
             }
 
             // Check for audio in response
@@ -438,13 +520,15 @@ const Hero: React.FC = () => {
       {/* Background Layer: removido slider de imagens */}
       <div className="absolute inset-0 w-full h-full z-0 bg-dark-bg"></div>
 
-      {/* 3D Spline Background Layer */}
-      <div className="absolute inset-0 w-full h-full z-10 pointer-events-auto" style={{ transform: 'translate3d(0,0,0)' }}>
-        <SplineScene
-          scene="https://prod.spline.design/5cpuLrlmubVp36q1/scene.splinecode"
-          className="w-full h-full"
-        />
-      </div>
+      {/* 3D Spline Background Layer (desativado em mobile para performance) */}
+      {!isMobile && (
+        <div className="absolute inset-0 w-full h-full z-10 pointer-events-auto" style={{ transform: 'translate3d(0,0,0)' }}>
+          <SplineScene
+            scene="https://prod.spline.design/5cpuLrlmubVp36q1/scene.splinecode"
+            className="w-full h-full"
+          />
+        </div>
+      )}
 
       {/* Main Content Grid */}
       <div className="relative z-20 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full pointer-events-none">
@@ -505,7 +589,7 @@ const Hero: React.FC = () => {
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ duration: 1, delay: 0.2 }}
-                className="relative h-[400px] lg:h-[600px] w-full flex items-center justify-center"
+                className="relative h-[320px] md:h-[420px] lg:h-[600px] w-full flex items-center justify-center"
             >
                 {/* 3D Sphere Container (Reactive) */}
                 <div className="absolute inset-0 z-0">
