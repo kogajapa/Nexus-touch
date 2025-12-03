@@ -178,6 +178,8 @@ const Hero: React.FC = () => {
   const inputStreamRef = useRef<MediaStream | null>(null);
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const sessionRef = useRef<any>(null); // Keep track of Gemini session
+  const nextStartTimeRef = useRef<number>(0);
+  const scheduledSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
   const { scrollY } = useScroll();
   const y1 = useTransform(scrollY, [0, 500], [0, 150]); 
@@ -252,11 +254,17 @@ const Hero: React.FC = () => {
             activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
             turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
           },
-        },
-        systemInstruction: {
-          parts: [{
-            text: 'Você é um assistente da Nexus Touch. Responda em português brasileiro de forma breve, natural e profissional. Você vende totens interativos de alta tecnologia.'
-          }]
+          systemInstruction: {
+            parts: [{
+              text: [
+                'Você é o atendente de voz da Nexus Touch (totens, avatares e mesas interativas com IA multimodal).',
+                'Pilares: hardware robusto (32"-55" 4K, PCAP, alumínio), rastreamento de mãos/gestos e presença, IA de voz/visão/texto, operação 24/7 com telemetria e atualizações OTA.',
+                'Portfólio: Nexus AI Avatar (avatar 3D responsivo para museus/educação), Nexus Memorial Interactive (linhas do tempo e acervos digitais), linha de totens indoor como Neo Slim V3 (22mm, 43" 4K), soluções saúde via Nexus Health (triagem, concierge, multiagentes).',
+                'Equipe: Taffarel (CEO, Nexus Health), Leandro (CTO, IA e totens).',
+                'Tom: brasileiro, conciso, natural, consultivo; não invente preços; sempre conduza para próximos passos (ver soluções, falar com time, agendar demo).'
+              ].join(' ')
+            }]
+          },
         },
         callbacks: {
           onopen: () => {
@@ -268,6 +276,16 @@ const Hero: React.FC = () => {
             // Check for turn complete
             if (msg.serverContent?.turnComplete) {
               console.log('✅ Turno completo');
+            }
+
+            // Handle interruption (barge-in)
+            if (msg.serverContent?.interrupted) {
+              console.log('⏹️ Resposta interrompida');
+              scheduledSourcesRef.current.forEach(src => {
+                try { src.stop(); } catch (e) {}
+              });
+              scheduledSourcesRef.current.clear();
+              nextStartTimeRef.current = audioCtx.currentTime;
             }
 
             // Check for audio in response
@@ -303,8 +321,17 @@ const Hero: React.FC = () => {
                     const source = audioCtx.createBufferSource();
                     source.buffer = audioBuffer;
                     source.connect(gainNode);
-                    source.start(0);
-                    console.log('▶️ Reproduzindo áudio...');
+
+                    // Garantir ordem de reprodução para evitar gaps
+                    nextStartTimeRef.current = Math.max(nextStartTimeRef.current, audioCtx.currentTime);
+                    source.start(nextStartTimeRef.current);
+                    nextStartTimeRef.current += audioBuffer.duration;
+
+                    scheduledSourcesRef.current.add(source);
+                    source.onended = () => {
+                      scheduledSourcesRef.current.delete(source);
+                    };
+                    console.log('▶️ Reproduzindo áudio (agendado)...');
                   } catch (err) {
                     console.error('❌ Erro ao decodificar áudio:', err);
                   }
@@ -347,7 +374,7 @@ const Hero: React.FC = () => {
 
         try {
           sessionRef.current.sendRealtimeInput({
-            audio: {
+            media: {
               data: base64,
               mimeType: 'audio/pcm;rate=16000',
             },
@@ -373,6 +400,12 @@ const Hero: React.FC = () => {
   const handleDisconnect = () => {
     setIsLive(false);
     audioLevelRef.current = 0;
+
+    scheduledSourcesRef.current.forEach(src => {
+      try { src.stop(); } catch (e) {}
+    });
+    scheduledSourcesRef.current.clear();
+    nextStartTimeRef.current = 0;
 
     // Cleanup Audio
     if (audioContextRef.current) {
